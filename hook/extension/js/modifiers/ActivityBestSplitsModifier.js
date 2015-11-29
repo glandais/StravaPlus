@@ -1,9 +1,10 @@
 /**
  *   ActivityBestSplitsModifier is responsible of ...
  */
-function ActivityBestSplitsModifier(userSettings, activityJson, hasPowerMeter, splitsConfiguration, saveSplitsConfigrationMethod) {
+function ActivityBestSplitsModifier(userSettings, activityJson, activityStatsMap, hasPowerMeter, splitsConfiguration, saveSplitsConfigrationMethod) {
     this.userSettings = userSettings;
     this.activityJson = activityJson;
+    this.activityStatsMap = activityStatsMap;
     this.hasPowerMeter = hasPowerMeter;
     this.splitsConfiguration = splitsConfiguration;
     this.saveSplitsConfigrationMethod = saveSplitsConfigrationMethod || function() {};
@@ -67,17 +68,7 @@ ActivityBestSplitsModifier.prototype = {
             selectedSplitId,
             measurementPreference = currentAthlete ? currentAthlete.get('measurement_preference') : 'meters';
 
-        var filterData = function(data, distance, smoothing) {
-            if (data && distance) {
-                var result = [];
-                result[0] = data[0];
-                for (i = 1, max = data.length; i < max; i++) {
-                    result[i] = result[i-1] + (distance[i] - distance[i-1]) * (data[i] - result[i-1]) / smoothing;
-                }
-                return result;
-            }
-        };
-        this.activityJson.filteredAltitude = filterData(this.activityJson.altitude, this.activityJson.distance, 200);
+        this.activityJson.altitude_smooth = Helper.smoothAltitude(this.activityJson, this.activityStatsMap.elevation);
 
         self.distanceUnit = (measurementPreference == 'meters') ? ActivityBestSplitsModifier.Units.Kilometers : ActivityBestSplitsModifier.Units.Miles;
 
@@ -596,8 +587,8 @@ ActivityBestSplitsModifier.prototype = {
                                         values.avgPower.timeOrDistance = timeOrDistance;
                                     }
 
-                                    elevationGain = totalGainOfValues(begin, end, activityJson.filteredAltitude) * ratio;
-                                    elevationDrop = totalDropOfValues(begin, end, activityJson.filteredAltitude) * ratio;
+                                    elevationGain = totalGainOfValues(begin, end, activityJson.altitude_smooth) * ratio;
+                                    elevationDrop = totalDropOfValues(begin, end, activityJson.altitude_smooth) * ratio;
                                     if (elevationGain > values.elevationGain.value) {
                                         values.elevationGain.value = elevationGain;
                                         values.elevationGain.begin = begin;

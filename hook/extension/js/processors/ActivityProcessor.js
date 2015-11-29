@@ -52,7 +52,7 @@ ActivityProcessor.prototype = {
         this.vacuumProcessor_.getActivityStream(function(activityStatsMap, activityStream, athleteWeight, hasPowerMeter) { // Get stream on page
 
             // Append altitude_smooth to fetched strava activity stream before compute analysis data on
-            activityStream.altitude_smooth = this.smoothAltitude_(activityStream, activityStatsMap.elevation);
+            activityStream.altitude_smooth = Helper.smoothAltitude(activityStream, activityStatsMap.elevation);
 
             var result = this.computeAnalysisData_(userGender, userRestHr, userMaxHr, userFTP, athleteWeight, hasPowerMeter, activityStatsMap, activityStream);
 
@@ -75,7 +75,7 @@ ActivityProcessor.prototype = {
         // Include speed and pace
         var moveData = [null, null];
         if (activityStream.velocity_smooth) {
-            moveData = this.moveData_(activityStatsMap, activityStream.velocity_smooth, activityStream.time);
+            moveData = this.moveData_(activityStatsMap, activityStream.velocity_smooth, activityStream.time, activityStream.distance);
         }
 
         // Q1 Speed
@@ -224,7 +224,7 @@ ActivityProcessor.prototype = {
     /**
      * ...
      */
-    moveData_: function(activityStatsMap, velocityArray, timeArray) {
+    moveData_: function(activityStatsMap, velocityArray, timeArray, distanceArray) {
 
         if (_.isEmpty(velocityArray) || _.isEmpty(timeArray)) {
             return null;
@@ -291,6 +291,15 @@ ActivityProcessor.prototype = {
         var varianceSpeed = (speedVarianceSum / speedsNonZero.length) - Math.pow(activityStatsMap.averageSpeed, 2);
         var standardDeviationSpeed = (varianceSpeed > 0) ? Math.sqrt(varianceSpeed) : 0;
         var percentiles = Helper.weightedPercentiles(speedsNonZero, speedsNonZeroDuration, [ 0.25, 0.5, 0.75 ]);
+        
+        var deltaDistanceArray = new Array();
+        deltaDistanceArray.push(0);
+        for (var i = 1; i < distanceArray.length; i++) {
+            deltaDistanceArray.push(distanceArray[i] - distanceArray[i - 1]);
+        }
+        var statistics = Helper.statistics(deltaDistanceArray, { weights : timeArray, treshold : velocityArray, tresholdValue : 1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("speed : ");
+        console.log(statistics);
 
         return [{
             'genuineAvgSpeed': genuineAvgSpeed,
@@ -376,6 +385,9 @@ ActivityProcessor.prototype = {
         var weightedWattsPerKg = weightedPower / (athleteWeight + ActivityProcessor.defaultBikeWeight);
         
         var percentiles = Helper.weightedPercentiles(wattsSamplesOnMove, wattsSamplesOnMoveDuration, [ 0.25, 0.5, 0.75 ]);
+        var statistics = Helper.statistics(powerArray, { weights : timeArray, treshold : velocityArray, tresholdValue : 1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("power : ");
+        console.log(statistics);
 
         // Update zone distribution percentage
         powerZones = this.finalizeDistribComputationZones(powerZones);
@@ -462,6 +474,9 @@ ActivityProcessor.prototype = {
 
         var TRIMPPerHour = TRIMP / hrrSecondsCount * 60 * 60;
         var percentiles = Helper.weightedPercentiles(heartRateArrayMoving, heartRateArrayMovingDuration, [ 0.25, 0.5, 0.75 ]);
+        var statistics = Helper.statistics(heartRateArray, { weights : timeArray, treshold : velocityArray, tresholdValue : 1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("hr : ");
+        console.log(statistics);
 
         return {
             'TRIMP': TRIMP,
@@ -559,6 +574,9 @@ ActivityProcessor.prototype = {
         cadenceZones = this.finalizeDistribComputationZones(cadenceZones);
 
         var percentiles = Helper.weightedPercentiles(cadenceArrayMoving, cadenceArrayDuration, [ 0.25, 0.5, 0.75 ]);
+        var statistics = Helper.statistics(cadenceArray, { weights : timeArray, treshold : cadenceArray, tresholdValue : ActivityProcessor.cadenceThresholdRpm, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("cadence : ");
+        console.log(statistics);
 
         return {
             'cadencePercentageMoving': cadenceRatioOnMovingTime * 100,
@@ -676,6 +694,9 @@ ActivityProcessor.prototype = {
         gradeZones = this.finalizeDistribComputationZones(gradeZones);
 
         var percentiles = Helper.weightedPercentiles(gradeArrayMoving, gradeArrayDistance, [ 0.25, 0.5, 0.75 ]);
+        var statistics = Helper.statistics(gradeArray, { weights : timeArray, treshold : velocityArray, tresholdValue : 1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("grade : ");
+        console.log(statistics);
 
         return {
             'avgGrade': avgGrade,
@@ -792,6 +813,30 @@ ActivityProcessor.prototype = {
         elevationZones = this.finalizeDistribComputationZones(elevationZones);
         ascentSpeedZones = this.finalizeDistribComputationZones(ascentSpeedZones);
 
+        var statistics = Helper.statistics(altitudeArray, { weights : distanceArray, treshold : velocityArray, tresholdValue : 1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("altitude : ");
+        console.log(statistics);
+
+        var ascentSpeed = new Array();
+        ascentSpeed.push(0);
+        for (var i = 1; i < altitudeArray.length; i++) { // Loop on samples
+            durationInSeconds = (timeArray[i] - timeArray[i - 1]); // Getting deltaTime in seconds (current sample and previous one)
+            distance = distanceArray[i] - distanceArray[i - 1];
+            var elevationDiff = altitudeArray[i] - altitudeArray[i - 1];
+
+            // If previous altitude lower than current then => climbing
+            if (elevationDiff > 0 && durationInSeconds > 0 && distance > 0 && (elevationDiff / distance) > 0.03 && velocityArray[i] * 3.6 > ActivityProcessor.movingThresholdKph) {
+                var ascentSpeedMeterPerHour = elevationDiff / durationInSeconds * 3600; // m climbed / seconds
+                ascentSpeed.push(ascentSpeedMeterPerHour);
+            } else {
+                ascentSpeed.push(0);
+            }
+        }
+
+        statistics = Helper.statistics(ascentSpeed, { weights : timeArray, treshold : ascentSpeed, tresholdValue : 0.1, percentiles : [ 0.25, 0.5, 0.75 ] });
+        console.log("ascent speed : ");
+        console.log(statistics);
+
         var percentilesElevation = Helper.weightedPercentiles(elevationSamples, elevationSamplesDistance, [ 0.25, 0.5, 0.75 ]);
         var percentilesAscent = Helper.weightedPercentiles(ascentSpeedMeterPerHourSamples, ascentSpeedMeterPerHourDistance, [ 0.25, 0.5, 0.75 ]);
 
@@ -811,52 +856,6 @@ ActivityProcessor.prototype = {
                 'upperQuartile': percentilesAscent[2].toFixed(0)
             }
         };
-    },
-
-    smoothAltitude_: function smoothAltitude(activityStream, stravaElevation) {
-        var activityAltitudeArray = activityStream.altitude;
-        var distanceArray = activityStream.distance;
-        var velocityArray = activityStream.velocity_smooth;
-        var smoothingL = 10;
-        var smoothingH = 600;
-        var smoothing;
-        var altitudeArray;
-        while (smoothingH - smoothingL >= 1) {
-            smoothing = smoothingL + (smoothingH - smoothingL) / 2;
-            altitudeArray = this.lowPassDataSmoothing_(activityAltitudeArray, distanceArray, smoothing);
-            var totalElevation = 0;
-            for (var i = 0; i < altitudeArray.length; i++) { // Loop on samples
-                if (i > 0 && velocityArray[i] * 3.6 > VacuumProcessor.movingThresholdKph) {
-                    var elevationDiff = altitudeArray[i] - altitudeArray[i - 1];
-                    if (elevationDiff > 0) {
-                        totalElevation += elevationDiff;
-                    }
-                }
-            }
-
-            if (totalElevation < stravaElevation) {
-                smoothingH = smoothing;
-            } else {
-                smoothingL = smoothing;
-            }
-        }
-        return altitudeArray;
-    },
-
-    lowPassDataSmoothing_: function(data, distance, smoothing) {
-        // Below algorithm is applied in this method
-        // http://phrogz.net/js/framerate-independent-low-pass-filter.html
-        if (data && distance) {
-            var result = [];
-            result[0] = data[0];
-            for (i = 1, max = data.length; i < max; i++) {
-                if (smoothing === 0) {
-                    result[i] = data[i];
-                } else {
-                    result[i] = result[i - 1] + (distance[i] - distance[i - 1]) * (data[i] - result[i - 1]) / smoothing;
-                }
-            }
-            return result;
-        }
     }
+
 };
